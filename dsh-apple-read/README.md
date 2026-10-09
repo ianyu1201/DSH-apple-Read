@@ -431,19 +431,28 @@ Harness 崩溃、插件重载、测试脚本退出……外层没了，python �
 
 ```bash
 cd /path/to/DSH-apple-Read/dsh-apple-read
-npm run check                        # 构建客户端 + 264 项离线测试（不调模型，最快）
+npm run check                        # 构建客户端 + 241 项离线测试（不调模型、不联网，最快）
+npm run test:live                    # 伴读核心：真调一次对话模型，验证标注确实进了上下文（需要 Key）
+npm run check:all                    # check + test:live
 npm run test:host                    # 宿主半端到端：静态资源 + 全部 API + SSE 聊天（35 项，真调模型）
-npm run test:sidecar                 # sidecar 单例/复用/孤儿回收/退出清理（14 项，假 uv，离线）
+npm run test:sidecar                 # sidecar 单例/复用/孤儿回收/退出清理/回收范围（16 项，假 uv，离线）
 npm run test:panel                   # 面板一致性：id 引用、Tab 映射、CSS 切换规则（26 项，纯静态）
 node tests/md.test.mjs               # 面板 markdown 渲染 + HTML 转义（15 项）
 node tests/client-bundle.test.mjs    # 客户端产物：真跑一遍 bundle，查槽位/子槽/适配层/降级（54 项）
 node tests/session-reuse.test.mjs    # 会话归拢：工作区三级解析 + 一本书一个会话 + 兜底改挂（42 项）
-node tests/annotation-chat.test.mjs  # 伴读核心：上下文注入 + 设置校验 + 面板接线（55 项）
+node tests/audit-fixes.test.mjs      # 审计修复回归：换书不串上下文 + 旧标注当锚点 + 面板设置落盘（30 项）
 node tests/migrate-sessions.test.mjs # 会话搬迁/删除工具：四处同步 + 事件字节不变 + 失败回滚（58 项）
-python3 ../test_eviction.py          # 模型空闲回收（11 项，不需要真模型）
-python3 ../mcp_test.py               # MCP stdio：initialize → tools/list → tools/call（7 工具）
-cd .. && uv run test_rerank.py       # 精排行为 + 置信度闸门回归保护（17 项）
+node tests/annotation-chat.test.mjs  # 伴读核心：上下文注入 + 设置校验 + 面板接线（55 项，真调模型）
+cd .. && uv run test_eviction.py     # 模型空闲回收（11 项，不需要真模型）
+cd .. && uv run test_library_cache.py # 书库缓存失效：新增书/进度/WAL/目录合并（23 项，临时假库）
+cd .. && uv run test_rerank.py       # 精排行为 + 置信度闸门回归保护（12 项，需要已建索引，会加载 1GB 精排模型）
+cd .. && python3 mcp_test.py         # MCP stdio：initialize → tools/list → tools/call（7 工具）
 ```
+
+> **`npm run check` 是纯离线的**：`test` 链里没有任何真调模型的用例。
+> 唯一会调模型的是 `tests/annotation-chat.test.mjs`（`npm run test:live`）——
+> 它在本地凭证里找得到 `ARK_API_KEY` 时会真的发一次对话请求。想完全不花钱就跑 `npm run check`。
+> 早先 README 把两者混在一起说「不调模型」，是错的，这里改过来了。
 
 > `migrate-sessions.test.mjs` 全程在临时目录里跑，不碰真实 `~/.dsh`：搬迁后**逐字节**确认
 > 除头部外的事件没被重写，回滚后**逐字节**确认整个 DSH_HOME 与动手前一致

@@ -152,11 +152,25 @@ if (!apiKey) {
 
 // ---------- 端到端：模型真的在用你划的那句吗 ----------
 console.log("\n[3] 端到端：就某条高亮提问");
+
+/**
+ * 从标注自己的原文/上下文里取几个「像词」的片段，用来判断回答有没有落在这句上。
+ *
+ * 以前这里写死了某一本书的词（鸣放/俞平伯/…）—— 换一本书、换一个用户的书库，
+ * 这些词必然一个都命中不了，测试就会假失败。词从**这条标注本身**取，才跟书无关。
+ */
+function keywordsFrom(a) {
+  const cut = (s) => String(s || "").split(/[\s，。；：、！？「」『』（）()\[\]…—–\-·"'’]+/);
+  const primary = cut(a.text).map((s) => s.trim()).filter((s) => s.length >= 2);
+  const secondary = cut(a.context).map((s) => s.trim()).filter((s) => s.length >= 2);
+  return [...new Set([...primary, ...secondary])].slice(0, 10);
+}
+
 if (!apiKey || !list.length) {
   console.log("  · 跳过");
 } else {
-  // 挑一条内容明确的：鸣放/政治运动那条
-  const target = list.find((a) => /鸣放|政治运动/.test(a.text || "")) || list[0];
+  // 挑原文最长的那条：短句/单字不好判断模型是否真的读到了这一句
+  const target = [...list].sort((a, b) => (b.text || "").length - (a.text || "").length)[0];
   console.log(`      问的是 #${target.id}：「${(target.text || "").slice(0, 40)}…」`);
   const res = await chat({
     book: BOOK, focusAnnotationId: target.id,
@@ -166,11 +180,12 @@ if (!apiKey || !list.length) {
   else if (!res.answer) bad("chat 没有正文");
   else {
     ok(`回答 ${res.answer.length} 字：${res.answer.slice(0, 80).replace(/\n/g, " ")}…`);
-    // 高亮原文 / 上下文里的关键词，命中任一即说明模型确实读到了「我划的那句」
-    const keys = ["鸣放", "政治运动", "三反", "俞平伯", "不理解", "所内"];
+    const keys = keywordsFrom(target);
     const hit = keys.filter((k) => res.answer.includes(k));
-    hit.length ? ok(`回答落在他划的那句上（命中：${hit.join("、")}）`)
-      : bad("回答看不出用了他划的句子", res.answer.slice(0, 160));
+    hit.length
+      ? ok(`回答落在他划的那句上（命中：${hit.slice(0, 4).join("、")}）`)
+      : bad("回答看不出用了他划的句子",
+            `标注词=${keys.slice(0, 6).join("|")} 回答=${res.answer.slice(0, 160)}`);
   }
 }
 

@@ -30,7 +30,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-os.environ.setdefault("APPLE_READ_INDEX", str(Path(__file__).parent / ".index"))
+# 索引目录：优先环境变量；只有仓库里**真的**有 .index 时才用它，
+# 否则交给引擎自己的默认（`~/DSH-apple-Read/index`）。
+# 以前是无条件 setdefault 到仓库内的 .index —— 默认布局下那个目录并不存在，
+# 于是所有检索都因为「没有索引」被跳过：测试显示通过，其实一条精排行为都没验。
+_REPO_INDEX = Path(__file__).parent / ".index"
+if "APPLE_READ_INDEX" not in os.environ and _REPO_INDEX.is_dir():
+    os.environ["APPLE_READ_INDEX"] = str(_REPO_INDEX)
 
 import books_rag as B  # noqa: E402
 
@@ -67,14 +73,21 @@ def search(book, query, **kw):
 
 
 def pick_book():
-    """优先 APPLE_READ_TEST_BOOK，否则取书库里的第一本。"""
+    """优先 APPLE_READ_TEST_BOOK；否则挑一本**已经有索引**的书。
+
+    不挑「列表第一本」：那本常常还没建索引，整份测试就被跳过 ——
+    看着是绿的，其实一条精排行为都没验。
+    """
     if BOOK_Q:
         return B.resolve_book(BOOK_Q)
     try:
         books = B.find_books()
     except Exception:  # noqa: BLE001
         return None
-    return books[0] if books else None
+    if not books:
+        return None
+    indexed = [b for b in books if b.get("indexed")]
+    return (indexed or books)[0]
 
 
 def main():

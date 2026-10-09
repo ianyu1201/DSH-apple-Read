@@ -43,11 +43,13 @@
   ],
   "scripts": {
     "build": "node build.mjs",
-    "test": "node tests/md.test.mjs && node tests/client-bundle.test.mjs && node tests/session-reuse.test.mjs && node tests/annotation-chat.test.mjs && node tests/panel-dom.test.mjs && node tests/migrate-sessions.test.mjs && node test-sidecar.mjs",
+    "test": "node tests/md.test.mjs && node tests/client-bundle.test.mjs && node tests/session-reuse.test.mjs && node tests/audit-fixes.test.mjs && node tests/panel-dom.test.mjs && node tests/migrate-sessions.test.mjs && node test-sidecar.mjs",
     "test:host": "node test-host.mjs",
     "test:sidecar": "node test-sidecar.mjs",
     "test:panel": "node tests/panel-dom.test.mjs",
-    "check": "node build.mjs && npm run test"
+    "check": "node build.mjs && npm run test",
+    "test:live": "node tests/annotation-chat.test.mjs",
+    "check:all": "node build.mjs && npm run test && npm run test:live"
   },
   "icon": "./icon.svg",
   "dsh": {

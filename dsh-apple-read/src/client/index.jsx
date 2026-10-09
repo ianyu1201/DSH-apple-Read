@@ -646,6 +646,15 @@ function BooksPage(props) {
           acquired = ref;
           setChat(ref);
           setError("");
+          // 阅读上下文必须**在这里**登记：此刻 (book, ref.sessionId) 才是配对的。
+          // 放到消息处理器里、用闭包里的 chat 去发，会拿旧书的会话配新书 —— 也就是串书。
+          if (book && ref.sessionId) {
+            void fetch(`${API}/reading-context`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ sessionId: ref.sessionId, book }),
+            }).catch(() => {});
+          }
         },
         (e) => {
           if (stale) return;
@@ -690,14 +699,9 @@ function BooksPage(props) {
           setBook(String(data.book));
           setBookSettled(true);
         }
-        // 选了书就先把阅读上下文登记好：这样用户直接打字提问也有依据。
-        if (chat?.sessionId && data.book) {
-          void fetch(`${API}/reading-context`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ sessionId: chat.sessionId, book: data.book }),
-          }).catch(() => {});
-        }
+        // 阅读上下文不在这里登记：新会话由上面的 effect 异步打开，此刻闭包里的 chat
+        // 很可能还是**旧书**的会话，会把新书登记进旧会话（串书回答的直接原因）。
+        // 登记改到 effect 里拿到 ref 之后做，保证 (book, sessionId) 是配对的。
         return;
       }
       if (data.type === "apple-read:ask") {
@@ -707,7 +711,8 @@ function BooksPage(props) {
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [chat]);
+    // 不再依赖 chat：处理器只用稳定的 setter 和 ref，避免每次换会话都重挂监听。
+  }, []);
 
   // ---- 「问 AI」：准备材料 → 送进原生输入框 ----
   askRef.current = async (data) => {
@@ -745,7 +750,7 @@ function BooksPage(props) {
       return;
     }
 
-    setError("");
+    setError(payload.focusError ? `你点的那条标注没取到：${payload.focusError}` : "");
     setStatus(`${payload.markCount} 条标注 · ${payload.hits} 段原文 · ${payload.reranked ? "已精排" : "未精排"}`);
     try {
       await bridge.sendPrompt(chat, payload.prompt);

@@ -169,31 +169,51 @@ try {
   r5.status === 200 ? ok("清理后请求正常") : bad("清理后请求失败", String(r5.status));
   spawnCount() === before + 1 ? ok("重新拉起了 1 个 sidecar") : bad(`spawn 次数应 +1，实际 ${spawnCount()}`);
 
-  // ================= [6] 回收只认 serve-http，不碰 MCP 的 serve =================
-  console.log("\n[6] 回收范围：只匹配 serve-http");
+  // ================= [6] 回收范围：只认「引擎绝对路径 + serve-http」 =================
+  console.log("\n[6] 回收范围：精确匹配，不误伤别的进程");
   const src = readFileSync(new URL("./lib/index.js", import.meta.url), "utf8");
-  src.includes('"books_rag.py serve-http"') || src.includes("books_rag.py serve-http")
-    ? ok("按 `books_rag.py serve-http` 匹配")
-    : bad("找不到 serve-http 匹配串");
+  // 必须用绝对路径拼，而不是裸的 `books_rag.py serve-http`：
+  // 裸串会匹配到 grep / tail / 编辑器（实测：一条 grep 命令把自己 SIGTERM 掉了）。
+  /ENGINE_MARK\s*=\s*`\$\{ENGINE\} serve-http`/.test(src)
+    ? ok("匹配串是「引擎绝对路径 + serve-http」")
+    : bad("匹配串没绑定引擎绝对路径（可能误伤 grep/tail 之类的进程）");
+  src.includes("ancestorPids") && src.includes("self.has(")
+    ? ok("排除自身与祖先进程，不会回收自己这条链")
+    : bad("没有排除自身/祖先进程");
+  !/line\.includes\("books_rag\.py serve-http"\)/.test(src)
+    ? ok("不再用裸串 `books_rag.py serve-http` 匹配")
+    : bad("还在用裸串匹配（会误伤无关进程）");
   !/books_rag\.py serve"\)/.test(src) ? ok("没有用 `serve` 做匹配（不会误杀 MCP）") : bad("匹配串可能误伤 MCP");
   src.includes("SIGTERM") && src.includes("SIGKILL")
     ? ok("先 SIGTERM 再兜底 SIGKILL")
     : bad("缺少兜底强杀");
 } finally {
-  // 收尾：把这一轮起的假 sidecar 全部清掉
-  try {
-    const src = readFileSync(new URL("./lib/index.js", import.meta.url), "utf8");
-    void src;
-  } catch { /* ignore */ }
+  // 收尾：只清掉**这一轮自己起的**假 sidecar。
+  //
+  // 以前这里除了 FAKE 还兜了一句 `books_rag.py serve-http`，那是个真事故：
+  // 用户正在用的真 sidecar 命令行里同样含这个串，于是「跑一次测试」就会把它
+  // SIGKILL 掉（插件会自己重启，所以表现为「测试完第一次提问特别慢」）。
+  // 真 sidecar 的生命周期归插件管，测试只该收自己拉起来的那几个。
+  const selfPids = new Set([process.pid, process.ppid]);
+  const logPids = existsSync(SPAWN_LOG)
+    ? readFileSync(SPAWN_LOG, "utf8").trim().split("\n").filter(Boolean).map(Number).filter(Boolean)
+    : [];
+  for (const pid of logPids) {
+    if (selfPids.has(pid)) continue;
+    try { process.kill(pid, "SIGKILL"); } catch { /* 已经没了 */ }
+  }
+  // 兜底：命令行里带 FAKE 路径的（假 uv 包装脚本自己也可能残留）
   try {
     const { execFileSync } = await import("node:child_process");
     const out = execFileSync("ps", ["-eo", "pid,command"], { encoding: "utf8" });
     for (const line of out.split("\n")) {
-      if (!line.includes(FAKE) && !line.includes("books_rag.py serve-http")) continue;
+      if (!line.includes(FAKE)) continue;              // ← 只认自己的假 uv，不碰真的
       const pid = Number(line.trim().match(/^(\d+)/)?.[1]);
-      if (pid && pid !== process.pid) { try { process.kill(pid, "SIGKILL"); } catch { /* ignore */ } }
+      if (pid && !selfPids.has(pid) && !logPids.includes(pid)) {
+        try { process.kill(pid, "SIGKILL"); } catch { /* ignore */ }
+      }
     }
-  } catch { /* ignore */ }
+  } catch { /* ps 不可用就算了 */ }
   await new Promise((r) => server.close(r));
   rmSync(TMP, { recursive: true, force: true });
   console.log(`\n结果：${pass} 通过 / ${fail} 失败`);

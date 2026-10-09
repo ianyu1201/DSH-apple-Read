@@ -206,16 +206,40 @@ function pidAlive(pid) {
 
 /**
  * 找出所有残留的 serve-http 进程。
- * 只匹配 `books_rag.py serve-http`——MCP 那个是 `books_rag.py serve`，不会被误杀。
+ *
+ * 必须匹配**引擎的绝对路径 + serve-http 子命令**，而不是光看 `books_rag.py serve-http`。
+ * 后者会误伤任何命令行里出现这串的进程——`grep 'books_rag.py serve-http'`、
+ * `tail -f` 日志、编辑器都算。实测踩过：一条 grep 命令把自己匹配了进去，
+ * 随后被回收逻辑 SIGTERM 掉（命令直接消失，很难联想到是插件干的）。
+ *
+ * MCP 那个是 `books_rag.py serve`，没有 `serve-http`，仍然不会被误杀。
  */
+const ENGINE_MARK = `${ENGINE} serve-http`;
+
+/** 当前进程及其祖先：绝不回收自己这条链上的任何进程。 */
+function ancestorPids() {
+  const out = new Set([process.pid]);
+  let pid = process.ppid;
+  for (let i = 0; i < 8 && pid > 1; i++) {
+    out.add(pid);
+    try {
+      const ppid = Number(execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" }).trim());
+      if (!ppid || ppid === pid) break;
+      pid = ppid;
+    } catch { break; }
+  }
+  return out;
+}
+
 function findSidecarPids() {
   try {
     const out = execFileSync("ps", ["-eo", "pid,command"], { encoding: "utf8" });
+    const self = ancestorPids();
     const pids = [];
     for (const line of out.split("\n")) {
-      if (!line.includes("books_rag.py serve-http")) continue;
+      if (!line.includes(ENGINE_MARK)) continue;      // 绝对路径 + serve-http，避免误伤
       const m = line.trim().match(/^(\d+)\s/);
-      if (m && Number(m[1]) !== process.pid) pids.push(Number(m[1]));
+      if (m && !self.has(Number(m[1]))) pids.push(Number(m[1]));
     }
     return pids;
   } catch {
@@ -646,38 +670,87 @@ class BooksStore {
 // 阅读材料组装（用户划的重点 + 全书检索）
 // --------------------------------------------------------------------------- //
 
+/** 把一条标注渲染成提示词里的一段。isFocus 时标注「用户正在问的就是这条」。 */
+function renderMark(a, isFocus) {
+  let s = `#${a.id}${isFocus ? "（用户正在问的就是这条）" : ""}`;
+  if (a.chapter) s += ` 章节「${a.chapter}」`;
+  s += `\n我划的：${(a.text || "").slice(0, 500)}`;
+  if (a.note) s += `\n我的笔记：${a.note.slice(0, 300)}`;
+  if (a.context) s += `\n前后原文：${a.context.slice(0, 700)}`;
+  return s;
+}
+
+/**
+ * 按 id 单独取一条标注（含原文与前后文）。
+ *
+ * 为什么不能只靠「最近 N 条里重排」：面板上能点到的标注可以很旧，
+ * `limit=12` 那份列表里根本没有它，于是 focusAnnotationId 只能在 12 条内挪位置，
+ * 模型拿不到用户真正在问的那句原文——功能看起来触发了，回答却没有依据。
+ * 这里走 `/context`（内部按 id 全量查找，不受 limit 影响）把那条锚点独立取回来。
+ */
+async function fetchFocusedAnnotation(id, book) {
+  try {
+    const up = await sidecarFetch("/context", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, before: 400, after: 400 }),
+    });
+    const data = await up.json();
+    if (!data || data.error || !data.annotation) {
+      return { error: String((data && data.error) || "找不到这条标注") };
+    }
+    const a = data.annotation;
+    // 跨书防护：面板传来的 id 可能属于另一本书（列表过期或换书瞬间点的）。
+    // 与其把别的书的原文当成锚点塞进提示词，不如如实说清。
+    if (book && a.book && a.book !== book) {
+      return { error: `这条标注属于《${a.book}》，不在《${book}》里` };
+    }
+    return {
+      ann: {
+        ...a,
+        chapter: data.chapter ?? a.chapter ?? null,
+        context: data.context ?? a.context ?? "",
+        exact: data.exact ?? a.exact ?? false,
+      },
+    };
+  } catch (e) {
+    return { error: String(e?.message || e).slice(0, 200) };
+  }
+}
+
 /**
  * 收集「用户划的重点」和「检索到的全书原文」。
  *
  * 标注是伴读的锚点：用户说「我标的这句」时指的是标注，不是全书检索结果。
  * 所以标注优先、检索只作背景——以前只做检索，导致这类问题完全无从回答。
+ *
+ * 锚点（focusMark）与背景（marks）分开：锚点按 id 独立取，保证多旧都能拿到；
+ * 最近 12 条只作背景，让模型知道用户平时都划了些什么。
  */
 async function buildReadingMaterial({ book, question, focusAnnotationId, withMarks = true, rerank, k = 6 }) {
   let marks = "";
   let markCount = 0;
   let marksError = "";
+  let focusMark = "";
+  let focusError = "";
+
+  // 锚点先取：它决定这一轮「在处理什么」，比背景列表重要。
+  if (book && withMarks && focusAnnotationId) {
+    const f = await fetchFocusedAnnotation(focusAnnotationId, book);
+    if (f.error) focusError = f.error;
+    else focusMark = renderMark(f.ann, true);
+  }
+
   if (book && withMarks) {
     try {
       const qs = new URLSearchParams({ book, limit: "12", context: "1" });
       const up = await sidecarFetch("/annotations?" + qs.toString());
       const data = await up.json();
-      const list = (data.annotations || []).filter((a) => a.text || a.note);
+      let list = (data.annotations || []).filter((a) => a.text || a.note);
+      // 锚点已经单独取过：从背景列表里摘掉，免得同一句在提示词里出现两次。
+      if (focusMark) list = list.filter((a) => a.id !== focusAnnotationId);
       markCount = list.length;
-      if (list.length) {
-        // 用户点「问 AI」时把那条提到最前，模型一眼看到「正在问的是这条」
-        if (focusAnnotationId) {
-          const i = list.findIndex((a) => a.id === focusAnnotationId);
-          if (i > 0) list.unshift(list.splice(i, 1)[0]);
-        }
-        marks = list.map((a) => {
-          let s = `#${a.id}${a.id === focusAnnotationId ? "（用户正在问的就是这条）" : ""}`;
-          if (a.chapter) s += ` 章节「${a.chapter}」`;
-          s += `\n我划的：${(a.text || "").slice(0, 500)}`;
-          if (a.note) s += `\n我的笔记：${a.note.slice(0, 300)}`;
-          if (a.context) s += `\n前后原文：${a.context.slice(0, 700)}`;
-          return s;
-        }).join("\n---\n");
-      }
+      if (list.length) marks = list.map((a) => renderMark(a, false)).join("\n---\n");
     } catch (e) {
       marksError = String(e?.message || e).slice(0, 200);
     }
@@ -703,7 +776,7 @@ async function buildReadingMaterial({ book, question, focusAnnotationId, withMar
       context = `（检索失败：${String(e?.message || e).slice(0, 200)}）`;
     }
   }
-  return { marks, markCount, marksError, context, reranked, hits };
+  return { marks, markCount, marksError, focusMark, focusError, context, reranked, hits };
 }
 
 /**
@@ -713,7 +786,7 @@ async function buildReadingMaterial({ book, question, focusAnnotationId, withMar
  * 东西（一段原文，或一条标注），全书检索只作背景；不要因为拿到了全书原文
  * 就把输出范围扩大成「整本书讲了什么」。
  */
-function readingContextText({ book, marks, markCount, marksError, context, focusAnnotationId, passage }) {
+function readingContextText({ book, marks, markCount, marksError, focusMark, focusError, context, focusAnnotationId, passage }) {
   const focusedPassage = passage && passage.text ? String(passage.text).slice(0, 2000) : "";
   const parts = ["<reading_context>", `当前在读：《${book}》。`];
 
@@ -723,12 +796,22 @@ function readingContextText({ book, marks, markCount, marksError, context, focus
     parts.push(`【用户正在问的这段原文】${where}\n---\n${focusedPassage}\n---`);
   }
 
+  // 被点击的那条标注：按 id 独立取到的，排在「划的重点」列表之前当锚点。
+  if (focusMark) {
+    parts.push(`【用户正在问的那条标注】\n---\n${focusMark}\n---`);
+  } else if (focusError) {
+    parts.push(
+      `（用户点的那条标注没能取到：${focusError}。`
+      + "如果这与本轮问题相关，如实说明拿不到那条原文，不要凭印象替它编内容。）"
+    );
+  }
+
   if (markCount) {
     parts.push(
       `【用户自己划的重点】共 ${markCount} 条，新的在前，来自 macOS「图书」App：\n---\n${marks}\n---\n`
       + "当用户说「我标的」「我划的」「这句」「这条」「我的笔记」「我标注的地方」时，指的就是上面这些。"
     );
-  } else if (!marksError) {
+  } else if (!marksError && !focusMark) {
     parts.push("（这本书还没有高亮或笔记。如果用户提到自己划过什么，如实说没读到。）");
   } else {
     parts.push(`（读不到标注库：${marksError}。如需，提醒用户给 DeepSeek Harness 授予「完全磁盘访问权限」并重启。）`);
@@ -742,11 +825,17 @@ function readingContextText({ book, marks, markCount, marksError, context, focus
       + "与前后文是什么关系。检索结果与标注只作背景，不要自动扩大成整本书的总结；"
       + "只有当用户本轮明确要求「整本书」「全书」时才扩大范围。"
     );
-  } else if (focusAnnotationId) {
+  } else if (focusMark) {
     parts.push(
-      `用户当前正在问的是标注 #${focusAnnotationId}。默认只回答这一条：它在说什么、为什么值得划。`
-      + "全书原文仅用于理解术语、人物与前后关系，不要自动扩大成整本书的总结；"
+      "用户当前正在问的是上面【用户正在问的那条标注】。默认只回答这一条：它在说什么、为什么值得划。"
+      + "全书原文与其余标注仅用于理解术语、人物与前后关系，不要自动扩大成整本书的总结；"
       + "只有当用户本轮明确要求「整本书」「全书」时才扩大范围。"
+    );
+  } else if (focusAnnotationId) {
+    // 取不到锚点原文时不要假装有：明确告诉模型「这条没拿到」，让它如实说。
+    parts.push(
+      `用户点了标注 #${focusAnnotationId}，但这条原文没有取到（${focusError || "未知原因"}）。`
+      + "如果本轮问题依赖那条原文，如实说明拿不到，不要凭印象补；其余材料只作背景。"
     );
   } else {
     parts.push("当前没有指定的标注，处理对象是全书问题。不要拿前几轮聊过的旧标注当作本轮对象。");
@@ -893,7 +982,7 @@ function makeHandler(store, ready) {
     const book = payload.book || "";
     const question = [...(payload.messages || [])].reverse().find((m) => m.role === "user")?.content || "";
 
-    const { marks, markCount, marksError, context, reranked } = await buildReadingMaterial({
+    const { marks, markCount, marksError, focusMark, focusError, context, reranked } = await buildReadingMaterial({
       book,
       question: payload.useContext === false ? "" : question,
       focusAnnotationId: payload.focusAnnotationId,
@@ -905,6 +994,19 @@ function makeHandler(store, ready) {
 
     const parts = [settings.systemPrompt || config.systemPrompt];
     if (book) parts.push(`当前在读：《${book}》`);
+    // 锚点排在最前：用户点「问 AI」问的就是这一条，别让它淹没在背景列表里。
+    if (focusMark) {
+      parts.push(
+        `【用户正在问的那条标注】\n---\n${focusMark}\n---\n`
+        + "用户本轮问的就是这一条：先正面回应它本身（说的是什么、为什么值得划），"
+        + "再联系前后原文和全书；不要泛泛复述整本书。"
+      );
+    } else if (focusError) {
+      parts.push(
+        `（用户点的那条标注没能取到：${focusError}。如果这与本轮问题相关，`
+        + "如实说明拿不到那条原文，不要凭印象替它编内容。）"
+      );
+    }
     if (marks) {
       parts.push(
         `【用户自己划的重点】用户在 macOS「图书」App 里标记的，共 ${markCount} 条，新的在前：\n`
@@ -913,7 +1015,7 @@ function makeHandler(store, ready) {
         + "围绕它陪读：先正面回应他划的这句本身（它说的是什么、为什么值得划），"
         + "再联系前后原文和全书；不要泛泛复述整本书。"
       );
-    } else if (book && !marksError) {
+    } else if (book && !marksError && !focusMark) {
       parts.push("（这本书还没有高亮或笔记。如果用户提到自己划过什么，如实说没读到。）");
     } else if (marksError) {
       parts.push(`（读不到标注库：${marksError}。如需，提醒用户给 DeepSeek Harness 授予「完全磁盘访问权限」并重启。）`);
@@ -927,7 +1029,10 @@ function makeHandler(store, ready) {
       .map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
 
     const emit = sseInit(res);
-    emit({ type: "context", hits: context.length, marks: markCount, reranked });
+    emit({
+      type: "context", hits: context.length, marks: markCount, reranked,
+      focused: !!focusMark, focusError: focusError || "",
+    });
     try {
       if (prov.style === "anthropic") await streamAnthropic(prov, key, sys, turns, emit);
       else await streamOpenAI(prov, key, sys, turns, emit);
@@ -1053,6 +1158,7 @@ function makeHandler(store, ready) {
           return json(res, 200, {
             ok: true, book: payload.book, chars: text.length,
             markCount: material.markCount, marksError: material.marksError || "",
+            focusError: material.focusError || "", focused: !!material.focusMark,
             hits: material.hits.length, reranked: material.reranked,
           });
         }
@@ -1095,6 +1201,7 @@ function makeHandler(store, ready) {
           return json(res, 200, {
             ok: true, prompt, book, chars: text.length, passage: !!passage,
             markCount: material.markCount, marksError: material.marksError || "",
+            focusError: material.focusError || "", focused: !!material.focusMark,
             hits: material.hits.length, reranked: material.reranked,
           });
         }

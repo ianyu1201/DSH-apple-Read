@@ -502,6 +502,14 @@ function BooksPage(props) {
           acquired = ref;
           setChat(ref);
           setError("");
+          if (book && ref.sessionId) {
+            void fetch(`${API}/reading-context`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ sessionId: ref.sessionId, book })
+            }).catch(() => {
+            });
+          }
         },
         (e) => {
           if (stale) return;
@@ -538,14 +546,6 @@ function BooksPage(props) {
           setBook(String(data.book));
           setBookSettled(true);
         }
-        if (chat?.sessionId && data.book) {
-          void fetch(`${API}/reading-context`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ sessionId: chat.sessionId, book: data.book })
-          }).catch(() => {
-          });
-        }
         return;
       }
       if (data.type === "apple-read:ask") {
@@ -554,7 +554,7 @@ function BooksPage(props) {
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [chat]);
+  }, []);
   askRef.current = async (data) => {
     if (!bridge || !chat) {
       setError("\u4F1A\u8BDD\u8FD8\u6CA1\u5C31\u7EEA\uFF0C\u8BF7\u7A0D\u5019\u518D\u8BD5");
@@ -587,7 +587,7 @@ function BooksPage(props) {
       setStatus("");
       return;
     }
-    setError("");
+    setError(payload.focusError ? `\u4F60\u70B9\u7684\u90A3\u6761\u6807\u6CE8\u6CA1\u53D6\u5230\uFF1A${payload.focusError}` : "");
     setStatus(`${payload.markCount} \u6761\u6807\u6CE8 \xB7 ${payload.hits} \u6BB5\u539F\u6587 \xB7 ${payload.reranked ? "\u5DF2\u7CBE\u6392" : "\u672A\u7CBE\u6392"}`);
     try {
       await bridge.sendPrompt(chat, payload.prompt);

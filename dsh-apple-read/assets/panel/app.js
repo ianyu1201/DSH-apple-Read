@@ -57,6 +57,34 @@ async function api(path, opts) {
   return j;
 }
 
+/**
+ * 把面板上的选择写回存档，并**读回确认**。
+ *
+ * 设置存在宿主侧 data.json（GET/POST /api/settings）。面板以前只改内存里的
+ * state，刷新页面就被 config 默认值冲掉——provider 选择看起来「不保存」就是这个原因。
+ * 保存失败只提示，不打断阅读。
+ */
+async function persistSettings(patch) {
+  try {
+    const r = await api("/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const s = r && r.settings;
+    if (s) {
+      // 以服务端读回的值回填：万一被白名单校验挡掉，UI 不会显示一个其实没存上的值。
+      if (typeof s.withMarks === "boolean") state.withMarks = s.withMarks;
+      if (typeof s.rerank === "boolean") state.rerank = s.rerank;
+      if (typeof s.providerId === "string") state.providerId = s.providerId;
+    }
+    return s || null;
+  } catch (e) {
+    toast("保存设置失败：" + e.message, true);
+    return null;
+  }
+}
+
 let toastTimer = null;
 function toast(msg, isErr) {
   const el = $("#toast");
@@ -121,15 +149,30 @@ function setStatus(msg) { $("#libstatus").textContent = msg || ""; }
 async function boot() {
   try {
     const cfg = await api("/config");
-    state.providerId = cfg.defaultProviderId;
+    // 存档读不到不是致命错误：退回 config 默认值继续可用。
+    const st = await api("/settings").catch(() => null);
+    const saved = (st && st.settings) || null;
+
+    // provider：优先用存过的，其次才是 config 的默认值。
+    // （以前无条件用 defaultProviderId，用户选完一刷新就回到默认。）
+    const ids = cfg.providers.map((p) => p.id);
+    state.providerId = saved && ids.includes(saved.providerId) ? saved.providerId : cfg.defaultProviderId;
     $("#provider").innerHTML = cfg.providers.map((p) =>
       `<option value="${esc(p.id)}">${esc(p.displayName)}${p.hasKey ? "" : "（未配置 Key）"}</option>`).join("");
     $("#provider").value = state.providerId;
 
+    // 「带上我划的重点」：存档优先
+    if (saved && typeof saved.withMarks === "boolean") {
+      state.withMarks = saved.withMarks;
+      $("#withMarks").checked = saved.withMarks;
+    }
+
     // 精排开关：模型没下载就灰掉并说明，避免「勾了却没效果」
     const rr = $("#withRerank");
     if (cfg.rerank) {
-      state.rerank = rr.checked;
+      // 存过就按存档，没存过就用控件当前默认勾选态
+      state.rerank = saved && typeof saved.rerank === "boolean" ? saved.rerank : rr.checked;
+      rr.checked = state.rerank;
       $("#rrwrap").title = `精排已启用（${cfg.rerankModel}）：检索到的段落会被 cross-encoder 重新打分，命中更准，慢约 1.8 秒`;
     } else {
       rr.checked = false;
@@ -143,7 +186,10 @@ async function boot() {
     toast("读取配置失败：" + e.message, true);
   }
 
-  $("#provider").addEventListener("change", (e) => { state.providerId = e.target.value; });
+  $("#provider").addEventListener("change", (e) => {
+    state.providerId = e.target.value;
+    void persistSettings({ providerId: state.providerId });
+  });
 
   await loadLibrary();
 
@@ -518,6 +564,9 @@ async function send() {
             note.textContent = "依据：" + bits.join(" + ");
             asst.parentNode.insertBefore(note, asst);
           }
+          // 点了某条标注却取不到它的原文时，明确提示——否则用户以为问了，
+          // 模型其实没拿到那一句，只能凭印象答。
+          if (obj.focusError) toast("你点的那条标注没取到：" + obj.focusError, true);
         } else if (obj.type === "error") {
           failed = obj.message;
         }
@@ -626,8 +675,12 @@ $("#q").addEventListener("keydown", (e) => {
 $("#withMarks").addEventListener("change", (e) => {
   state.withMarks = e.target.checked;
   renderAnnotations();
+  void persistSettings({ withMarks: state.withMarks });
 });
-$("#withRerank").addEventListener("change", (e) => { state.rerank = e.target.checked; });
+$("#withRerank").addEventListener("change", (e) => {
+  state.rerank = e.target.checked;
+  void persistSettings({ rerank: state.rerank });
+});
 $("#openBook").addEventListener("click", openBook);
 $("#clearChat").addEventListener("click", () => {
   state.history = [];

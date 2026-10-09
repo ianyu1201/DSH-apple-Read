@@ -156,16 +156,50 @@ def _ro(db: Path):
 # --------------------------------------------------------------------------- #
 
 _library_cache: dict | None = None
+_library_stamp: tuple | None = None
 
 
-def load_library() -> dict:
-    """asset_id -> {title, author, path, progress, last_opened, finished}。读不到返回 {}。"""
-    global _library_cache
-    if _library_cache is not None:
+def _library_fingerprint() -> tuple:
+    """BKLibrary 主库 + WAL 的指纹（文件名、mtime_ns、大小）。
+
+    「图书」App 常驻时，新增的书和阅读进度往往先进 WAL 而不落主库，
+    所以只看主库文件会漏掉变化——必须把 -wal 一起算进来。
+
+    但**不能**把 `-shm` 算进来：那只是 WAL 的索引，SQLite 每次读都会动它的
+    mtime（实测：连续两次只读，-shm 的 mtime_ns 每次都变，主库与 -wal 不动）。
+    把它算进去会让指纹永远在变、缓存永远不命中，等于每次都重读一遍库。
+    任何逻辑变化都会落到主库或 -wal 上，看这两个就够了。
+
+    注意：函数名不能叫 `_library_stamp`——那个名字是缓存指纹本身，
+    同名的话 def 会先把全局值顶掉，随后赋值又把函数顶掉，第二次调用就崩。
+    """
+    out: list[tuple] = []
+    for db in sorted(glob.glob(str(LIBRARY_DB / "BKLibrary*.sqlite"))):
+        for suffix in ("", "-wal"):
+            p = Path(str(db) + suffix)
+            try:
+                st = p.stat()
+                out.append((p.name, st.st_mtime_ns, st.st_size))
+            except OSError:
+                out.append((p.name, None, None))
+    return tuple(out)
+
+
+def load_library(force: bool = False) -> dict:
+    """asset_id -> {title, author, path, progress, last_opened, finished}。读不到返回 {}。
+
+    缓存按上面的指纹失效：常驻引擎里「图书」App 新增书、更新阅读进度后，
+    下一次调用就能读到新值，不必重启。force=True 可强制重读。
+    """
+    global _library_cache, _library_stamp
+    stamp = _library_fingerprint()
+    if (not force and _library_cache is not None and _library_stamp is not None
+            and stamp == _library_stamp):
         return _library_cache
     _library_cache = {}
     dbs = sorted(glob.glob(str(LIBRARY_DB / "BKLibrary*.sqlite")))
     if not dbs:
+        _library_stamp = stamp
         return _library_cache
     try:
         con = _ro(Path(dbs[0]))
@@ -181,8 +215,11 @@ def load_library() -> dict:
                 "last_opened": cd_time(last), "finished": bool(fin), "genre": genre or "",
             }
         con.close()
+        _library_stamp = stamp
     except sqlite3.Error:
+        # 读失败不留指纹：下次调用重试，而不是把空结果一直缓存下去
         _library_cache = {}
+        _library_stamp = None
     return _library_cache
 
 
@@ -204,11 +241,16 @@ def find_books() -> list[dict]:
             "genre": rec["genre"],
             "indexed": (INDEX_DIR / f"{bid}.json").exists(),
         })
-    if not books and BOOKS_DIR.is_dir():
+    if BOOKS_DIR.is_dir():
+        # 与 BKLibrary 合并，而不是「书库为空才扫目录」：刚加进来、还没被「图书」App
+        # 登记（或只存在于目录里）的书，也能出现在列表里，否则「刷新书库」永远看不到它。
+        seen = {b["id"] for b in books}
         for entry in sorted(BOOKS_DIR.iterdir()):
             if entry.name.startswith(".") or not entry.name.endswith(".epub") or not entry.is_dir():
                 continue
             bid = book_id(entry.name)
+            if bid in seen:
+                continue
             books.append({
                 "id": bid, "name": entry.name, "title": entry.name[:-5], "author": "",
                 "path": str(entry), "asset_id": None, "progress": 0.0,
