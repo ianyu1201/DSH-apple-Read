@@ -1,0 +1,71 @@
+{
+  "name": "dsh-apple-read",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "DSH-apple-Read：向量语义检索 macOS「图书」App 书库，读高亮笔记，一键在图书 App 中打开",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "README.md",
+    "cordis.patch.yml",
+    "lib",
+    "assets",
+    "locale",
+    "icon.svg"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node tests/md.test.mjs && node tests/client-bundle.test.mjs && node tests/session-reuse.test.mjs && node tests/annotation-chat.test.mjs && node tests/panel-dom.test.mjs && node tests/migrate-sessions.test.mjs && node test-sidecar.mjs",
+    "test:host": "node test-host.mjs",
+    "test:sidecar": "node test-sidecar.mjs",
+    "test:panel": "node tests/panel-dom.test.mjs",
+    "check": "node build.mjs && npm run test"
+  },
+  "icon": "./icon.svg",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "meta": {
+      "title": "DSH-apple-Read",
+      "description": "向量语义检索「图书」App 书库 + 高亮笔记 + 一键打开图书 App"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-ui-chat"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-skill": "0.2.0-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-skill": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
+}

@@ -1,0 +1,8 @@
+# pnpm 10+ 把部分设置从 .npmrc 挪到了这里，pnpm 12 不再读 .npmrc 的 auto-install-peers。
+# 不关掉 peer 自动安装，pnpm install 会把 @deepseek-ai/cordis 装进本目录，
+# 而插件在 profile 里是 link: 软链安装的 —— Node 会优先找到这一份，
+# 于是同一个进程里出现第二份 cordis，服务注册会乱掉。
+autoInstallPeers: false
+# esbuild 的安装脚本要允许执行，否则 pnpm install 会以 ERR_PNPM_IGNORED_BUILDS 非 0 退出
+allowBuilds:
+  esbuild: true

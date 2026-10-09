@@ -1,0 +1,58 @@
+# dsh-apple-read bundle patch
+#
+# 一次插入两行：
+#   1) apple-read-mcp —— 用 DSH 自带的 MCP 客户端把向量引擎挂成工具，
+#      模型侧工具名是 mcp__apple_read__list_books / search_book / recent_annotations 等。
+#   2) apple-read-plugin —— 插件本体：注册 apple-read 技能 + 侧边栏面板路由。
+#
+# 本文件**不含任何本机绝对路径**，换台机器、换个目录克隆下来都能直接用：
+#
+#   · command 不写死 uv 的绝对路径。DSH Desktop 启动时会读取登录 shell 的环境，
+#     PATH 里通常已经包含 ~/.local/bin，所以裸 `uv` 就能找到。
+#     万一你的启动方式不在 PATH 里，用环境变量 APPLE_READ_UV 覆盖即可。
+#   · args 里的引擎路径在**启动时**算出来：从 profile 目录解析出本插件的安装位置
+#     （link: 安装会指向你克隆的目录），再取同级的 books_rag.py。
+#
+# 注意：**不要**在这里再写 env.PATH。mcp-client 是把 config.env 合并到父进程环境之上，
+# 显式写 PATH 会把整个 PATH 替换掉，反而丢掉 nvm/homebrew 等目录，导致 uv 或 python 找不到。
+
+- insert:
+    - id: apple-read-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: apple_read
+        transport: stdio
+        # 优先用 APPLE_READ_UV；没设就用 PATH 上的 uv
+        command: !!js process.env.APPLE_READ_UV || 'uv'
+        args:
+          - run
+          # 启动时解析引擎路径：插件装在哪，同级的 books_rag.py 就在哪
+          - !!js >-
+              (() => {
+                try {
+                  const p = process.getBuiltinModule('node:path');
+                  const url = process.getBuiltinModule('node:url');
+                  const { createRequire } = process.getBuiltinModule('node:module');
+                  // baseUrl 是插件所在树的解析基准（bundle patch 行 = profile 目录）。
+                  // 它可能是目录路径、也可能是目录的 file URL，结尾斜杠还不一定有 ——
+                  // 统一成「以 / 结尾的目录 URL」，否则 createRequire 会把它当成文件，
+                  // 去上一层目录找 node_modules，结果解析失败。
+                  let base = String(baseUrl || '');
+                  if (!base.startsWith('file:')) base = url.pathToFileURL(base).href;
+                  if (!base.endsWith('/')) base += '/';
+                  const pkg = createRequire(base).resolve('dsh-apple-read/package.json');
+                  return p.join(p.dirname(pkg), '..', 'books_rag.py');
+                } catch (e) {
+                  console.warn('[apple-read] 无法定位 books_rag.py：' + e.message
+                    + '（请把插件装在克隆下来的 DSH-apple-Read 目录里，或设置 APPLE_READ_ENGINE）');
+                  return process.env.APPLE_READ_ENGINE || 'books_rag.py';
+                }
+              })()
+          - serve
+        # 建索引可能要几十秒，但工具调用本身不该因此被判超时
+        toolCallTimeoutMs: 300000
+        # 标注读不到（未授权）不应该让整个 Harness 启动失败
+        failOnStartupError: false
+
+    - id: apple-read-plugin
+      name: 'dsh-apple-read'

@@ -1,0 +1,23 @@
+{
+  "systemPrompt": "你是「DSH-apple-Read」。用户主力阅读器是 macOS 的「图书」App，你是陪读的一方。\n\n你会拿到两类依据：【用户自己划的重点】（用户在书里标记的高亮，带所在章节和前后原文）和【检索到的全书原文】。\n\n规则：\n1. 先看【用户自己划的重点】。用户说「我标的」「我划的」「这句」「这条」时指的就是它——要正面回应他划的这句本身（它在说什么、为什么值得划、和他的处境有什么关系），再联系上下文，不要泛泛复述整本书。\n2. 只用给出的依据作答。依据里没有的，直说没有，不要凭印象补。\n3. 引用时点明章节名，方便用户回「图书」App 对位置。\n4. 口语化、短段落，避免套话（赋能/落地/抓手/值得注意的是）。",
+  "providers": [
+    {
+      "id": "volc",
+      "displayName": "火山 · deepseek-v4.1-flash（复用 Harness 配置）",
+      "style": "anthropic",
+      "baseURL": "https://ark.cn-beijing.volces.com/api/plan",
+      "model": "deepseek-v4.1-flash",
+      "maxTokens": 4096,
+      "apiKeyEnv": "ARK_API_KEY"
+    },
+    {
+      "id": "deepseek",
+      "displayName": "DeepSeek 官方（OpenAI 兼容）",
+      "style": "openai",
+      "baseURL": "https://api.deepseek.com",
+      "model": "deepseek-chat",
+      "maxTokens": 4096,
+      "apiKeyEnv": "DEEPSEEK_API_KEY"
+    }
+  ]
+}

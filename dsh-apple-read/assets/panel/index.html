@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSH-apple-Read</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!--
+  注意：这里**没有**自己的标题栏。
+  插件在 DSH 里已经有一条原生标题栏（「📚 DSH-apple-Read · 读在「图书」App · 问在这里」+ 返回对话），
+  面板再放一个 brand 就会变成左上角两个标题 —— 之前就是这个毛病。
+  所以引擎状态放进左栏底部，模型选择放进工具栏，全局面板只保留一条内容工具栏。
+-->
+<main class="wrap">
+  <!--
+    窄栏（嵌入 DSH 侧边栏，约 340px）里把「书库 / 重点 / 在书里找」做成三个 Tab：
+    一次只显示一个，各自拿到完整高度。以前是上下堆叠 —— 书库被压到 42% 高、列表只露
+    五六本，下面两块又要互相抢高度。
+    宽屏（直接打开 /apple-read/）仍保留原来的左右两栏，此时 Tab 栏自动隐藏，
+    「重点 / 在书里找」回到可折叠的两块（见 style.css 的 media query）。
+  -->
+  <nav class="tabs" id="tabs" role="tablist">
+    <button class="tab on" data-tab="books" role="tab">书库<span class="n" id="nBooks"></span></button>
+    <button class="tab" data-tab="marks" role="tab">重点<span class="n" id="nMarks"></span></button>
+    <button class="tab" data-tab="search" role="tab">在书里找</button>
+  </nav>
+
+  <aside class="library">
+    <div class="libhead">
+      <input id="filter" type="search" placeholder="筛选书名…" autocomplete="off">
+      <button id="indexAll" class="ghost small" title="给所有还没建索引的书建向量索引（本地计算，不花 API 钱）">全量索引</button>
+    </div>
+    <div id="books" class="booklist"><div class="empty">正在读取书库…</div></div>
+    <div class="libfoot">
+      <div id="engine" class="engine">引擎启动中…</div>
+      <div id="libstatus" class="status"></div>
+    </div>
+  </aside>
+
+  <section class="reader">
+    <div class="bookbar">
+      <div id="booktitle" class="bt placeholder">← 从左边选一本书</div>
+      <span class="spacer"></span>
+      <select id="provider" class="ghost small" title="用哪个模型来回答"></select>
+      <button id="indexBook" class="ghost small" disabled
+              title="把这本书全文切成片段、算成向量存到本地。首次问某本书时会自动建，手动点只是提前做掉">建索引</button>
+      <button id="openBook" class="ghost small" disabled title="在 macOS「图书」App 里打开这本书接着读">在「图书」中打开</button>
+      <button id="clearChat" class="ghost small" title="清空当前这本书的对话">清空</button>
+    </div>
+
+    <details id="annbox" class="annbox">
+      <summary><span id="annsum">我划的重点</span></summary>
+      <div id="annlist" class="annlist"><div class="empty">选中书籍后显示。</div></div>
+    </details>
+
+    <!--
+      在书里找：宿主早就暴露了 /api/search（向量语义检索 + 可选精排），
+      但面板一直没接。它和「我划的重点」是同一类东西——都关于当前这本书，
+      所以放在同一个区域，点某段的「问 AI」会走和标注一样的原生会话通道。
+    -->
+    <details id="searchbox" class="annbox">
+      <summary><span id="searchsum">在书里找</span></summary>
+      <div class="searchrow">
+        <input id="q" type="search" placeholder="换个说法也能召回，不只是字面匹配…" autocomplete="off">
+        <button id="doSearch" class="ghost small">检索</button>
+      </div>
+      <div id="hits" class="annlist"><div class="empty">输入一句话，在整本书里找相关段落。</div></div>
+    </details>
+
+    <div id="chat" class="chat">
+      <div class="hint">
+        选一本书，然后直接问。<br>
+        你在「图书」App 里划的重点会<strong>自动带进来</strong>——可以直接问「我标的这句什么意思」。<br>
+        答案会标出章节，方便你回「图书」App 对位置。
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="composer-main">
+        <textarea id="input" rows="1" placeholder="问这本书…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <div class="composer-opts">
+          <label class="chk"><input type="checkbox" id="withMarks" checked> 带上我划的重点</label>
+          <label class="chk" id="rrwrap" title="精排：用 cross-encoder 把检索到的段落重新打分排序，命中更准（慢约 1.8 秒）。需要先下载精排模型。">
+            <input type="checkbox" id="withRerank" checked> 精排
+          </label>
+          <span id="markhint" class="markhint"></span>
+        </div>
+      </div>
+      <button id="send">发送</button>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
