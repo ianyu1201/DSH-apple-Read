@@ -1,7 +1,12 @@
-# Apple Books RAG · 让 DeepSeek Harness 给你的「图书」App 当伴读
+# DSH-apple-Read · 让 DeepSeek Harness 给你的「图书」App 当伴读
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/ianyu1201/DSH-apple-Read)](https://github.com/ianyu1201/DSH-apple-Read/releases)
+![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
+![MCP tools](https://img.shields.io/badge/MCP%20tools-7-brightgreen.svg)
 
 继续用 macOS 原生的「图书」App 读书（高亮、笔记、阅读进度都不变），
-让 [DeepSeek Harness](https://github.com/) 在旁边当陪读：**全书向量语义检索**、
+让 DeepSeek Harness 在旁边当陪读：**全书向量语义检索**、
 **读你的高亮和笔记**、**围绕你划的那句聊**、**一键把书在「图书」App 里打开**。
 
 - 检索完全在本地跑（`bge-small-zh-v1.5` 向量 + 字面加权），**不花 API 钱**，书稿不出本机。
@@ -55,7 +60,7 @@ DSH-apple-Read/
 ## 前置条件
 
 - macOS，且用「图书」App 读书（数据源就是它自己的书库）
-- [DeepSeek Harness](https://github.com/) 桌面版
+- DeepSeek Harness 桌面版
 - [`uv`](https://docs.astral.sh/uv/)（引擎靠它跑 PEP 723 脚本，自动装 Python 依赖，无需 venv）
 - **可选**：给 Harness 开「完全磁盘访问权限」——不开也能用全文检索，只是读不到高亮和准确书名
 

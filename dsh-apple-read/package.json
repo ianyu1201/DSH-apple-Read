@@ -4,6 +4,22 @@
   "private": true,
   "license": "MIT",
   "description": "DSH-apple-Read：向量语义检索 macOS「图书」App 书库，读高亮笔记，一键在图书 App 中打开",
+  "keywords": [
+    "apple-books",
+    "macos",
+    "rag",
+    "vector-search",
+    "mcp",
+    "deepseek-harness"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ianyu1201/DSH-apple-Read.git"
+  },
+  "homepage": "https://github.com/ianyu1201/DSH-apple-Read#readme",
+  "bugs": {
+    "url": "https://github.com/ianyu1201/DSH-apple-Read/issues"
+  },
   "type": "module",
   "main": "lib/index.js",
   "exports": {
